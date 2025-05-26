@@ -4,7 +4,9 @@ import '../services/secure_auth_service.dart';
 import '../services/secure_storage_service.dart';
 import '../utils/constants.dart';
 import '../utils/api_key_manager.dart';
+import '../utils/security_logger.dart';
 import 'login_screen.dart';
+import 'main_navigation_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -43,8 +45,8 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     
     _animationController.forward();
     
-    // Start initialization after a short delay
-    Future.delayed(const Duration(milliseconds: 1000), () {
+    // Attendre un peu pour l'animation, puis initialiser
+    Future.delayed(const Duration(milliseconds: 800), () {
       _initializeApp();
     });
   }
@@ -56,29 +58,51 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   }
   
   Future<void> _initializeApp() async {
+    SecurityLogger.info('=== APP INITIALIZATION ===');
+    
     try {
-      // Initialize API key manager
+      // 1. Initialiser l'API key manager
+      SecurityLogger.info('Initializing API key manager...');
       await ApiKeyManager.initializeApiKey();
       
-      // Initialize services
+      // 2. Initialiser le service de stockage
+      SecurityLogger.info('Initializing storage service...');
       final storageService = Provider.of<SecureStorageService>(context, listen: false);
       await storageService.initialize();
       
+      // 3. Initialiser le service d'authentification
+      SecurityLogger.info('Initializing auth service...');
       final authService = Provider.of<SecureAuthService>(context, listen: false);
       await authService.initialize();
       
       if (!mounted) return;
       
-      // Navigate based on authentication status
+      // 4. Naviguer selon l'état d'authentification
+      SecurityLogger.info('Checking authentication status...');
+      SecurityLogger.info('Is authenticated: ${authService.isAuthenticated}');
+      SecurityLogger.info('Current user: ${authService.currentUser?.email}');
+      
+      // Attendre un peu pour que l'animation se termine
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      if (!mounted) return;
+      
       if (authService.isAuthenticated) {
-        Navigator.of(context).pushReplacementNamed('/');
+        SecurityLogger.info('User is authenticated, navigating to main screen');
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const MainNavigationScreen()),
+        );
       } else {
+        SecurityLogger.info('User not authenticated, navigating to login screen');
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (context) => const LoginScreen()),
         );
       }
+      
     } catch (e) {
-      // If anything fails during initialization, go to login screen
+      SecurityLogger.error('App initialization failed: ${e.toString()}');
+      
+      // En cas d'erreur, aller à l'écran de connexion
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (context) => const LoginScreen()),
@@ -90,7 +114,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           gradient: AppColors.primaryGradient,
         ),
         child: Center(
@@ -105,7 +129,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       // App logo
-                      Icon(
+                      const Icon(
                         Icons.movie,
                         size: 100,
                         color: Colors.white,
@@ -114,9 +138,9 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                       const SizedBox(height: 20),
                       
                       // App name
-                      Text(
+                      const Text(
                         AppConstants.appName,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 32,
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
@@ -128,6 +152,17 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                       // Loading indicator
                       const CircularProgressIndicator(
                         color: Colors.white,
+                      ),
+                      
+                      const SizedBox(height: 20),
+                      
+                      // Loading text
+                      const Text(
+                        'Initialisation...',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 16,
+                        ),
                       ),
                     ],
                   ),

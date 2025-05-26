@@ -1,0 +1,1 @@
+ C:\\Users\\meder\\Documents\\SITCN-S4\\APPmobile\\APP\\.dart_tool\\flutter_build\\72417c70e76d18d493f9860dc4c92068\\native_assets.json: 

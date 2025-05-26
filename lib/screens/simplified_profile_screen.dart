@@ -14,11 +14,12 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  late SecureAuthService _authService;
-  late LocalStorageService _storageService;
+  SecureAuthService? _authService;
+  LocalStorageService? _storageService;
   UserPreferences? _userPreferences;
   bool _isLoading = true;
   bool _isEditing = false;
+  bool _isDisposed = false;
   
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _bioController = TextEditingController();
@@ -33,20 +34,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
-    _authService = Provider.of<SecureAuthService>(context, listen: false);
-    _storageService = Provider.of<LocalStorageService>(context, listen: false);
     _loadUserData();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Sauvegarder les références aux services pour éviter les erreurs de widget lifecycle
+    if (!_isDisposed) {
+      _authService = Provider.of<SecureAuthService>(context, listen: false);
+      _storageService = Provider.of<LocalStorageService>(context, listen: false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _isDisposed = true;
+    _usernameController.dispose();
+    _bioController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadUserData() async {
+    if (_isDisposed) return;
+    
     setState(() {
       _isLoading = true;
     });
 
     try {
-      final prefs = await _storageService.getUserPreferences();
+      final storageService = _storageService ?? Provider.of<LocalStorageService>(context, listen: false);
+      final prefs = await storageService.getUserPreferences();
 
-      if (mounted) {
+      if (mounted && !_isDisposed) {
         setState(() {
           _userPreferences = prefs;
           _isLoading = false;
@@ -54,7 +74,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
     } catch (e) {
       SecurityLogger.error('Error loading user preferences: ${e.toString()}');
-      if (mounted) {
+      if (mounted && !_isDisposed) {
         setState(() {
           _isLoading = false;
         });
@@ -69,7 +89,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   void _startEditing() {
-    final user = _authService.currentUser;
+    if (_isDisposed) return;
+    
+    final authService = _authService ?? Provider.of<SecureAuthService>(context, listen: false);
+    final user = authService.currentUser;
     if (user == null) return;
     
     setState(() {
@@ -80,7 +103,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _saveProfile() async {
-    final user = _authService.currentUser;
+    if (_isDisposed) return;
+    
+    final authService = _authService ?? Provider.of<SecureAuthService>(context, listen: false);
+    final user = authService.currentUser;
     if (user == null) return;
     
     setState(() {
@@ -88,12 +114,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     });
 
     try {
-      final success = await _authService.updateProfile(
+      final success = await authService.updateProfile(
         username: _usernameController.text.trim(),
         bio: _bioController.text.trim(),
       );
 
-      if (mounted) {
+      if (mounted && !_isDisposed) {
         if (success) {
           setState(() {
             _isEditing = false;
@@ -121,7 +147,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
     } catch (e) {
       SecurityLogger.error('Profile update error: ${e.toString()}');
-      if (mounted) {
+      if (mounted && !_isDisposed) {
         setState(() {
           _isLoading = false;
         });
@@ -137,56 +163,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _toggleDarkMode(bool value) async {
-    if (_userPreferences == null) return;
+    if (_isDisposed || _userPreferences == null) return;
     
-    await _storageService.setDarkModePreference(value);
+    final storageService = _storageService ?? Provider.of<LocalStorageService>(context, listen: false);
+    await storageService.setDarkModePreference(value);
     await _loadUserData();
   }
 
   Future<void> _updateGenrePreferences(List<String> genres) async {
-    if (_userPreferences == null) return;
+    if (_isDisposed || _userPreferences == null) return;
     
-    await _storageService.updatePreferredGenres(genres);
+    final storageService = _storageService ?? Provider.of<LocalStorageService>(context, listen: false);
+    await storageService.updatePreferredGenres(genres);
     await _loadUserData();
   }
 
   Future<void> _logout() async {
+    if (_isDisposed) return;
+    
     showDialog(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
         return AlertDialog(
           title: const Text('Se déconnecter'),
           content: const Text('Êtes-vous sûr de vouloir vous déconnecter ?'),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.pop(dialogContext),
               child: const Text('Annuler'),
             ),
             ElevatedButton(
               onPressed: () async {
-                Navigator.pop(context);
-                setState(() {
-                  _isLoading = true;
-                });
-                try {
-                  await _authService.signOut();
-                  if (mounted) {
-                    Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
-                  }
-                } catch (e) {
-                  SecurityLogger.error('Logout error: ${e.toString()}');
-                  if (mounted) {
-                    setState(() {
-                      _isLoading = false;
-                    });
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Erreur lors de la déconnexion'),
-                        backgroundColor: AppColors.error,
-                      ),
-                    );
-                  }
-                }
+                Navigator.pop(dialogContext);
+                await _performLogout();
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.error,
@@ -199,58 +208,130 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  @override
-  void dispose() {
-    _usernameController.dispose();
-    _bioController.dispose();
-    super.dispose();
+  Future<void> _performLogout() async {
+    try {
+      // Utiliser les références sauvegardées ou récupérer depuis le contexte si possible
+      final authService = _authService;
+      
+      if (authService != null) {
+        // Déconnecter sans utiliser le contexte
+        await authService.signOut();
+        
+        // Naviguer seulement si le widget est encore monté
+        if (mounted && !_isDisposed) {
+          // Utiliser pushNamedAndRemoveUntil pour éviter les problèmes de navigation
+          Navigator.of(context).pushNamedAndRemoveUntil(
+            '/login', 
+            (route) => false,
+          );
+        }
+      } else {
+        SecurityLogger.error('Auth service not available for logout');
+      }
+    } catch (e) {
+      SecurityLogger.error('Logout error: ${e.toString()}');
+      // En cas d'erreur, essayer quand même de naviguer vers la page de connexion
+      if (mounted && !_isDisposed) {
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/login', 
+          (route) => false,
+        );
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final user = _authService.currentUser;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    
-    if (user == null) {
-      return Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text(
-                'Vous n\'êtes pas connecté',
-                style: TextStyle(fontSize: 18),
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () => Navigator.of(context).pushReplacementNamed('/login'),
-                child: const Text('Se connecter'),
-              ),
-            ],
-          ),
-        ),
+    if (_isDisposed) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
       );
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Profil'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _logout,
-            tooltip: 'Déconnexion',
+    return Consumer<SecureAuthService>(
+      builder: (context, authService, child) {
+        final user = authService.currentUser;
+        final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+        
+        if (user == null) {
+          return Scaffold(
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text(
+                    'Vous n\'êtes pas connecté',
+                    style: TextStyle(fontSize: 18),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () => Navigator.of(context).pushReplacementNamed('/login'),
+                    child: const Text('Se connecter'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Profil'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.logout),
+                onPressed: _logout,
+                tooltip: 'Déconnexion',
+              ),
+              // Bouton de debug
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert),
+                onSelected: (value) {
+                  if (value == 'clear') {
+                    _clearAllData();
+                  }
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(
+                    value: 'clear',
+                    child: Text('Clear All Data (Debug)'),
+                  ),
+                ],
+              ),
+            ],
           ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppColors.accent),
-            )
-          : _isEditing
-              ? _buildEditProfileForm(user)
-              : _buildProfileContent(user, isDarkMode),
+          body: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppColors.accent),
+                )
+              : _isEditing
+                  ? _buildEditProfileForm(user)
+                  : _buildProfileContent(user, isDarkMode),
+        );
+      },
     );
+  }
+
+  // Fonction de debug pour effacer toutes les données
+  Future<void> _clearAllData() async {
+    try {
+      final authService = _authService ?? Provider.of<SecureAuthService>(context, listen: false);
+      await authService.clearAllUserData();
+      
+      if (mounted && !_isDisposed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Toutes les données ont été effacées'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        
+        // Naviguer vers l'écran de connexion
+        Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
+      }
+    } catch (e) {
+      SecurityLogger.error('Clear data error: ${e.toString()}');
+    }
   }
 
   Widget _buildProfileContent(dynamic user, bool isDarkMode) {

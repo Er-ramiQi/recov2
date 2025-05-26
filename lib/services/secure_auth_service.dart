@@ -10,21 +10,26 @@ import 'secure_storage_service.dart';
 
 class SecureAuthService with ChangeNotifier {
   final SecureStorageService _storageService;
-  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage(
+    aOptions: AndroidOptions(
+      encryptedSharedPreferences: true,
+      resetOnError: true,
+    ),
+  );
   
   UserProfile? _currentUser;
   bool _isLoading = false;
   
+  // Session management
+  static const String _sessionKey = 'current_user_email';
+  static const String _sessionValidKey = 'session_valid';
+  
   // Authentication settings
   static const int _maxLoginAttempts = 5;
   static const int _lockoutDurationMinutes = 15;
-  static const int _minPasswordLength = 8;
-  static const bool _requireUppercase = true;
-  static const bool _requireLowercase = true;
-  static const bool _requireNumbers = true;
-  static const bool _requireSpecialChars = true;
+  static const int _minPasswordLength = 4;
   
-  // Store login attempts to prevent brute force attacks
+  // Store login attempts
   final Map<String, List<DateTime>> _loginAttempts = {};
   
   // Constructor
@@ -37,15 +42,14 @@ class SecureAuthService with ChangeNotifier {
   
   // Initialize the service
   Future<void> initialize() async {
+    SecurityLogger.info('=== INITIALIZING AUTH SERVICE ===');
     _isLoading = true;
     notifyListeners();
     
     try {
       await _storageService.initialize();
-      final userData = await _storageService.getUserProfile();
-      if (userData != null) {
-        _currentUser = userData;
-      }
+      await _restoreSession();
+      await _debugStorageContents();
     } catch (e) {
       SecurityLogger.error('Error initializing auth service: ${e.toString()}');
     } finally {
@@ -54,221 +58,169 @@ class SecureAuthService with ChangeNotifier {
     }
   }
   
-  // Hash a password with salt
+  // Debug helper to see what's in storage
+  Future<void> _debugStorageContents() async {
+    try {
+      SecurityLogger.info('=== STORAGE DEBUG ===');
+      final keys = [
+        'current_user_email',
+        'session_valid',
+        'test_key_12345',
+      ];
+      
+      for (String key in keys) {
+        final value = await _secureStorage.read(key: key);
+        SecurityLogger.info('Key: $key -> Value exists: ${value != null}');
+      }
+    } catch (e) {
+      SecurityLogger.error('Debug storage error: ${e.toString()}');
+    }
+  }
+  
+  // Test storage functionality
+  Future<bool> _testSecureStorage() async {
+    try {
+      const testKey = 'test_key_12345';
+      const testValue = 'test_value_12345';
+      
+      await _secureStorage.write(key: testKey, value: testValue);
+      final readValue = await _secureStorage.read(key: testKey);
+      await _secureStorage.delete(key: testKey);
+      
+      final success = readValue == testValue;
+      SecurityLogger.info('Storage test result: $success');
+      return success;
+    } catch (e) {
+      SecurityLogger.error('Storage test failed: ${e.toString()}');
+      return false;
+    }
+  }
+  
+  // Restore session from storage
+  Future<void> _restoreSession() async {
+    try {
+      SecurityLogger.info('=== RESTORING SESSION ===');
+      
+      final storageWorking = await _testSecureStorage();
+      if (!storageWorking) {
+        SecurityLogger.error('Storage not working, cannot restore session');
+        return;
+      }
+      
+      final currentUserEmail = await _secureStorage.read(key: _sessionKey);
+      final sessionValid = await _secureStorage.read(key: _sessionValidKey);
+      
+      SecurityLogger.info('Stored email: $currentUserEmail');
+      SecurityLogger.info('Session valid: $sessionValid');
+      
+      if (currentUserEmail != null && sessionValid == 'true') {
+        final userData = await _secureStorage.read(key: 'userdata_$currentUserEmail');
+        if (userData != null) {
+          _currentUser = UserProfile.fromJson(jsonDecode(userData));
+          SecurityLogger.info('Session restored successfully: $currentUserEmail');
+        } else {
+          SecurityLogger.warn('User data not found, clearing session');
+          await _clearSession();
+        }
+      } else {
+        SecurityLogger.info('No valid session found');
+      }
+    } catch (e) {
+      SecurityLogger.error('Error restoring session: ${e.toString()}');
+      await _clearSession();
+    }
+  }
+  
+  // Save session
+  Future<void> _saveSession(String email) async {
+    try {
+      await _secureStorage.write(key: _sessionKey, value: email);
+      await _secureStorage.write(key: _sessionValidKey, value: 'true');
+      SecurityLogger.info('Session saved for: $email');
+    } catch (e) {
+      SecurityLogger.error('Error saving session: ${e.toString()}');
+    }
+  }
+  
+  // Clear session
+  Future<void> _clearSession() async {
+    try {
+      await _secureStorage.delete(key: _sessionKey);
+      await _secureStorage.delete(key: _sessionValidKey);
+      SecurityLogger.info('Session cleared');
+    } catch (e) {
+      SecurityLogger.error('Error clearing session: ${e.toString()}');
+    }
+  }
+  
+  // Hash password
   String _hashPassword(String password, String salt) {
     final bytes = utf8.encode(password + salt);
     final digest = sha256.convert(bytes);
     return digest.toString();
   }
   
-  // Generate a random salt
+  // Generate salt
   String _generateSalt() {
     final random = Random.secure();
-    final values = List<int>.generate(32, (i) => random.nextInt(256));
+    final values = List<int>.generate(16, (i) => random.nextInt(256));
     return base64Url.encode(values);
   }
   
-// Validate email format
+  // Validate email
   bool _isValidEmail(String email) {
-    final emailRegex = RegExp(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$');
-    return emailRegex.hasMatch(email);
+    return email.contains('@') && email.contains('.');
   }
   
-  // Check if a user is locked out due to too many attempts
+  // Check lockout
   bool _isUserLocked(String email) {
-    if (!_loginAttempts.containsKey(email) || _loginAttempts[email]!.isEmpty) {
-      return false;
-    }
+    if (!_loginAttempts.containsKey(email)) return false;
     
-    // Filter attempts to only include those within the lockout window
     final now = DateTime.now();
-    final lockoutThreshold = now.subtract(Duration(minutes: _lockoutDurationMinutes));
     final recentAttempts = _loginAttempts[email]!.where(
-      (attempt) => attempt.isAfter(lockoutThreshold)
+      (attempt) => now.difference(attempt).inMinutes < _lockoutDurationMinutes
     ).toList();
     
     _loginAttempts[email] = recentAttempts;
-    
-    // Check if there are too many recent attempts
     return recentAttempts.length >= _maxLoginAttempts;
   }
   
-  // Get remaining time in lockout
-  int _getRemainingLockTime(String email) {
-    if (!_loginAttempts.containsKey(email) || _loginAttempts[email]!.isEmpty) {
-      return 0;
-    }
-    
-    final now = DateTime.now();
-    final oldestAttempt = _loginAttempts[email]!.reduce(
-      (a, b) => a.isBefore(b) ? a : b
-    );
-    
-    final lockoutEnd = oldestAttempt.add(Duration(minutes: _lockoutDurationMinutes));
-    final remainingSeconds = lockoutEnd.difference(now).inSeconds;
-    
-    return remainingSeconds > 0 ? remainingSeconds : 0;
-  }
-  
-  // Record a login attempt
+  // Record attempt
   void _recordLoginAttempt(String email) {
-    if (!_loginAttempts.containsKey(email)) {
-      _loginAttempts[email] = [];
-    }
-    
+    _loginAttempts[email] ??= [];
     _loginAttempts[email]!.add(DateTime.now());
   }
   
-  // Reset login attempts
+  // Reset attempts
   void _resetLoginAttempts(String email) {
     _loginAttempts.remove(email);
   }
   
-  // Sign in with email and password
-  Future<Map<String, dynamic>> signIn(String email, String password) async {
-    // Validate email format
-    if (!_isValidEmail(email)) {
-      return {
-        'success': false,
-        'message': 'Format d\'email invalide',
-      };
-    }
-    
-    // Check if the user is locked out
-    if (_isUserLocked(email)) {
-      return {
-        'success': false,
-        'message': 'Compte temporairement verrouillé suite à trop de tentatives.',
-        'isLocked': true,
-        'remainingTime': _getRemainingLockTime(email),
-      };
-    }
-    
-    _isLoading = true;
-    notifyListeners();
-    
-    try {
-      // Add a random delay to prevent timing attacks
-      await Future.delayed(Duration(milliseconds: 500 + Random().nextInt(1000)));
-      
-      // Get stored credentials
-      final storedHashedPassword = await _secureStorage.read(key: 'password_$email');
-      final storedSalt = await _secureStorage.read(key: 'salt_$email');
-      
-      // Check if user exists
-      if (storedHashedPassword == null || storedSalt == null) {
-        _recordLoginAttempt(email);
-        return {
-          'success': false,
-          'message': 'Email ou mot de passe incorrect',
-          'attemptsLeft': _maxLoginAttempts - (_loginAttempts[email]?.length ?? 0),
-        };
-      }
-      
-      // Hash the provided password with the stored salt
-      final hashedPassword = _hashPassword(password, storedSalt);
-      
-      // Check if passwords match
-      if (hashedPassword != storedHashedPassword) {
-        _recordLoginAttempt(email);
-        return {
-          'success': false,
-          'message': 'Email ou mot de passe incorrect',
-          'attemptsLeft': _maxLoginAttempts - (_loginAttempts[email]?.length ?? 0),
-        };
-      }
-      
-      // Load user profile
-      final userData = await _secureStorage.read(key: 'userdata_$email');
-      if (userData != null) {
-        _currentUser = UserProfile.fromJson(jsonDecode(userData));
-        await _storageService.saveUserProfile(_currentUser!);
-      } else {
-        // Create a new profile if none exists
-        _currentUser = UserProfile(
-          id: 'user_${DateTime.now().millisecondsSinceEpoch}',
-          username: email.split('@')[0],
-          email: email,
-          createdAt: DateTime.now(),
-          lastLogin: DateTime.now(),
-        );
-        
-        // Save the profile
-        await _secureStorage.write(
-          key: 'userdata_$email', 
-          value: jsonEncode(_currentUser!.toJson())
-        );
-        await _storageService.saveUserProfile(_currentUser!);
-      }
-      
-      // Update last login time
-      _currentUser = _currentUser!.copyWith(lastLogin: DateTime.now());
-      await _secureStorage.write(
-        key: 'userdata_$email', 
-        value: jsonEncode(_currentUser!.toJson())
-      );
-      await _storageService.saveUserProfile(_currentUser!);
-      
-      // Reset login attempts on successful login
-      _resetLoginAttempts(email);
-      
-      SecurityLogger.info('User logged in: $email');
-      
-      return {
-        'success': true,
-        'message': 'Connexion réussie',
-      };
-    } catch (e) {
-      SecurityLogger.error('Sign in error: ${e.toString()}');
-      return {
-        'success': false,
-        'message': 'Une erreur est survenue lors de la connexion',
-      };
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
-  
-  // Sign up with email and password
+  // SIGN UP - Version simplifiée pour éviter les erreurs
   Future<Map<String, dynamic>> signUp(String username, String email, String password) async {
-    // Validate email format
+    SecurityLogger.info('=== SIGN UP START ===');
+    
     if (!_isValidEmail(email)) {
-      return {
-        'success': false,
-        'message': 'Format d\'email invalide',
-      };
+      return {'success': false, 'message': 'Email invalide'};
     }
     
-    // Check password strength
-    final passwordCheck = checkPasswordStrength(password);
-    if (!passwordCheck['isValid']) {
-      return {
-        'success': false,
-        'message': 'Mot de passe trop faible',
-        'details': passwordCheck['weaknesses'],
-      };
+    if (password.length < _minPasswordLength) {
+      return {'success': false, 'message': 'Mot de passe trop court'};
     }
     
     _isLoading = true;
     notifyListeners();
     
     try {
-      // Check if email already exists
-      final existingPassword = await _secureStorage.read(key: 'password_$email');
-      if (existingPassword != null) {
-        return {
-          'success': false,
-          'message': 'Cet email est déjà utilisé',
-        };
+      // Test storage
+      if (!await _testSecureStorage()) {
+        return {'success': false, 'message': 'Erreur de stockage'};
       }
       
-      // Generate salt and hash password
+      // Create credentials
       final salt = _generateSalt();
       final hashedPassword = _hashPassword(password, salt);
-      
-      // Create user profile
-      _currentUser = UserProfile(
+      final userProfile = UserProfile(
         id: 'user_${DateTime.now().millisecondsSinceEpoch}',
         username: username,
         email: email,
@@ -276,62 +228,131 @@ class SecureAuthService with ChangeNotifier {
         lastLogin: DateTime.now(),
       );
       
-      // Store credentials securely
+      // Save credentials
       await _secureStorage.write(key: 'password_$email', value: hashedPassword);
       await _secureStorage.write(key: 'salt_$email', value: salt);
-      await _secureStorage.write(
-        key: 'userdata_$email', 
-        value: jsonEncode(_currentUser!.toJson())
-      );
+      await _secureStorage.write(key: 'userdata_$email', value: jsonEncode(userProfile.toJson()));
       
-      // Save to profile storage
-      await _storageService.saveUserProfile(_currentUser!);
+      // Verify save
+      final savedPassword = await _secureStorage.read(key: 'password_$email');
+      final savedSalt = await _secureStorage.read(key: 'salt_$email');
+      final savedUserData = await _secureStorage.read(key: 'userdata_$email');
       
-      SecurityLogger.info('New user registered: $email');
+      SecurityLogger.info('Save verification:');
+      SecurityLogger.info('- Password saved: ${savedPassword != null}');
+      SecurityLogger.info('- Salt saved: ${savedSalt != null}');
+      SecurityLogger.info('- User data saved: ${savedUserData != null}');
       
-      return {
-        'success': true,
-        'message': 'Inscription réussie',
-      };
+      if (savedPassword == null || savedSalt == null || savedUserData == null) {
+        SecurityLogger.error('SAVE FAILED - Data not persisted');
+        return {'success': false, 'message': 'Erreur lors de la sauvegarde'};
+      }
+      
+      // Auto-login
+      _currentUser = userProfile;
+      await _saveSession(email);
+      
+      SecurityLogger.info('=== SIGN UP SUCCESS ===');
+      return {'success': true, 'message': 'Inscription réussie'};
+      
     } catch (e) {
       SecurityLogger.error('Sign up error: ${e.toString()}');
-      return {
-        'success': false,
-        'message': 'Une erreur est survenue lors de l\'inscription',
-      };
+      return {'success': false, 'message': 'Erreur: ${e.toString()}'};
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
   
-  // Sign out
-  Future<void> signOut() async {
+  // SIGN IN - Version simplifiée
+  Future<Map<String, dynamic>> signIn(String email, String password) async {
+    SecurityLogger.info('=== SIGN IN START ===');
+    
+    if (!_isValidEmail(email)) {
+      return {'success': false, 'message': 'Email invalide'};
+    }
+    
+    if (_isUserLocked(email)) {
+      return {'success': false, 'message': 'Compte verrouillé'};
+    }
+    
     _isLoading = true;
     notifyListeners();
     
     try {
-      SecurityLogger.info('User logged out: ${_currentUser?.email}');
-      _currentUser = null;
-      await _storageService.clearUserProfile();
+      // Test storage
+      if (!await _testSecureStorage()) {
+        return {'success': false, 'message': 'Erreur de stockage'};
+      }
+      
+      // Get stored data
+      final storedPassword = await _secureStorage.read(key: 'password_$email');
+      final storedSalt = await _secureStorage.read(key: 'salt_$email');
+      final userData = await _secureStorage.read(key: 'userdata_$email');
+      
+      SecurityLogger.info('Data retrieval:');
+      SecurityLogger.info('- Password found: ${storedPassword != null}');
+      SecurityLogger.info('- Salt found: ${storedSalt != null}');
+      SecurityLogger.info('- User data found: ${userData != null}');
+      
+      if (storedPassword == null || storedSalt == null || userData == null) {
+        SecurityLogger.error('USER NOT FOUND - Missing data');
+        _recordLoginAttempt(email);
+        return {'success': false, 'message': 'Utilisateur non trouvé'};
+      }
+      
+      // Verify password
+      final hashedInputPassword = _hashPassword(password, storedSalt);
+      if (hashedInputPassword != storedPassword) {
+        SecurityLogger.info('Password mismatch');
+        _recordLoginAttempt(email);
+        return {'success': false, 'message': 'Mot de passe incorrect'};
+      }
+      
+      // Login successful
+      _currentUser = UserProfile.fromJson(jsonDecode(userData));
+      await _saveSession(email);
+      _resetLoginAttempts(email);
+      
+      SecurityLogger.info('=== SIGN IN SUCCESS ===');
+      return {'success': true, 'message': 'Connexion réussie'};
+      
     } catch (e) {
-      SecurityLogger.error('Sign out error: ${e.toString()}');
+      SecurityLogger.error('Sign in error: ${e.toString()}');
+      return {'success': false, 'message': 'Erreur: ${e.toString()}'};
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
   
-  // Update profile
-  Future<bool> updateProfile({
-    String? username,
-    String? bio,
-    String? avatarUrl,
-  }) async {
-    if (_currentUser == null) return false;
+  // SIGN OUT - Version sécurisée
+  Future<void> signOut() async {
+    SecurityLogger.info('=== SIGN OUT START ===');
     
-    _isLoading = true;
-    notifyListeners();
+    try {
+      // Clear session first
+      await _clearSession();
+      
+      // Clear current user
+      _currentUser = null;
+      
+      SecurityLogger.info('=== SIGN OUT SUCCESS ===');
+    } catch (e) {
+      SecurityLogger.error('Sign out error: ${e.toString()}');
+    } finally {
+      // Always notify, even if there's an error
+      try {
+        notifyListeners();
+      } catch (e) {
+        SecurityLogger.error('Error notifying listeners: ${e.toString()}');
+      }
+    }
+  }
+  
+  // Update profile
+  Future<bool> updateProfile({String? username, String? bio, String? avatarUrl}) async {
+    if (_currentUser == null) return false;
     
     try {
       _currentUser = _currentUser!.copyWith(
@@ -344,157 +365,41 @@ class SecureAuthService with ChangeNotifier {
         key: 'userdata_${_currentUser!.email}', 
         value: jsonEncode(_currentUser!.toJson())
       );
-      await _storageService.saveUserProfile(_currentUser!);
       
+      notifyListeners();
       return true;
     } catch (e) {
       SecurityLogger.error('Update profile error: ${e.toString()}');
       return false;
-    } finally {
-      _isLoading = false;
-      notifyListeners();
     }
   }
   
-  // Check password strength
+  // Password strength check
   Map<String, dynamic> checkPasswordStrength(String password) {
-    bool hasUppercase = _requireUppercase ? password.contains(RegExp(r'[A-Z]')) : true;
-    bool hasLowercase = _requireLowercase ? password.contains(RegExp(r'[a-z]')) : true;
-    bool hasNumber = _requireNumbers ? password.contains(RegExp(r'[0-9]')) : true;
-    bool hasSpecialChar = _requireSpecialChars ? 
-                         password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]')) : true;
-    bool hasMinLength = password.length >= _minPasswordLength;
-    
-    // Calculate strength (0-100)
-    int strength = 0;
-    
-    if (hasMinLength) strength += 25;
-    if (hasUppercase) strength += 25;
-    if (hasLowercase) strength += 10;
-    if (hasNumber) strength += 25;
-    if (hasSpecialChar) strength += 25;
-    
-    // Reduce strength for short passwords
-    if (password.length < 10) strength -= (10 - password.length) * 2;
-    
-    // Ensure strength is between 0-100
-    strength = strength.clamp(0, 100);
-    
-    // Check if valid based on requirements
-    bool isValid = hasMinLength && hasUppercase && hasLowercase && hasNumber && hasSpecialChar;
-    
-    // Collect weaknesses
+    bool isValid = password.length >= _minPasswordLength;
     List<String> weaknesses = [];
-    if (!hasMinLength) weaknesses.add('Le mot de passe doit contenir au moins $_minPasswordLength caractères');
-    if (!hasUppercase) weaknesses.add('Le mot de passe doit contenir au moins une lettre majuscule');
-    if (!hasLowercase) weaknesses.add('Le mot de passe doit contenir au moins une lettre minuscule');
-    if (!hasNumber) weaknesses.add('Le mot de passe doit contenir au moins un chiffre');
-    if (!hasSpecialChar) weaknesses.add('Le mot de passe doit contenir au moins un caractère spécial');
+    
+    if (!isValid) {
+      weaknesses.add('Minimum $_minPasswordLength caractères requis');
+    }
     
     return {
       'isValid': isValid,
-      'strength': strength,
+      'strength': isValid ? 75 : 25,
       'weaknesses': weaknesses,
     };
   }
   
-  // Change password
-  Future<Map<String, dynamic>> changePassword(String currentPassword, String newPassword) async {
-    if (_currentUser == null) {
-      return {
-        'success': false,
-        'message': 'Vous devez être connecté pour changer de mot de passe',
-      };
-    }
-    
+  // Clear all data
+  Future<void> clearAllUserData() async {
     try {
-      final email = _currentUser!.email;
-      final storedSalt = await _secureStorage.read(key: 'salt_$email');
-      final storedHashedPassword = await _secureStorage.read(key: 'password_$email');
-      
-      if (storedSalt == null || storedHashedPassword == null) {
-        return {
-          'success': false,
-          'message': 'Impossible de vérifier le mot de passe actuel',
-        };
-      }
-      
-      // Verify current password
-      final hashedCurrentPassword = _hashPassword(currentPassword, storedSalt);
-      if (hashedCurrentPassword != storedHashedPassword) {
-        return {
-          'success': false,
-          'message': 'Mot de passe actuel incorrect',
-        };
-      }
-      
-      // Check new password strength
-      final passwordCheck = checkPasswordStrength(newPassword);
-      if (!passwordCheck['isValid']) {
-        return {
-          'success': false,
-          'message': 'Nouveau mot de passe trop faible',
-          'details': passwordCheck['weaknesses'],
-        };
-      }
-      
-      // Generate new salt and hash new password
-      final newSalt = _generateSalt();
-      final hashedNewPassword = _hashPassword(newPassword, newSalt);
-      
-      // Store new credentials
-      await _secureStorage.write(key: 'password_$email', value: hashedNewPassword);
-      await _secureStorage.write(key: 'salt_$email', value: newSalt);
-      
-      SecurityLogger.info('Password changed for user: $email');
-      
-      return {
-        'success': true,
-        'message': 'Mot de passe changé avec succès',
-      };
-    } catch (e) {
-      SecurityLogger.error('Change password error: ${e.toString()}');
-      return {
-        'success': false,
-        'message': 'Une erreur est survenue lors du changement de mot de passe',
-      };
-    }
-  }
-  
-  // Delete account
-  Future<bool> deleteAccount(String password) async {
-    if (_currentUser == null) return false;
-    
-    try {
-      final email = _currentUser!.email;
-      final storedSalt = await _secureStorage.read(key: 'salt_$email');
-      final storedHashedPassword = await _secureStorage.read(key: 'password_$email');
-      
-      if (storedSalt == null || storedHashedPassword == null) {
-        return false;
-      }
-      
-      // Verify password
-      final hashedPassword = _hashPassword(password, storedSalt);
-      if (hashedPassword != storedHashedPassword) {
-        return false;
-      }
-      
-      // Delete all user data
-      await _secureStorage.delete(key: 'password_$email');
-      await _secureStorage.delete(key: 'salt_$email');
-      await _secureStorage.delete(key: 'userdata_$email');
-      await _storageService.clearUserProfile();
-      
+      SecurityLogger.info('=== CLEARING ALL DATA ===');
+      await _secureStorage.deleteAll();
       _currentUser = null;
+      SecurityLogger.info('All data cleared');
       notifyListeners();
-      
-      SecurityLogger.info('Account deleted: $email');
-      
-      return true;
     } catch (e) {
-      SecurityLogger.error('Delete account error: ${e.toString()}');
-      return false;
+      SecurityLogger.error('Error clearing data: ${e.toString()}');
     }
   }
 }
