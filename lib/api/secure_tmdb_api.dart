@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import '../models/movie.dart';
@@ -32,8 +32,9 @@ class SecureTMDBApi {
       // Configure base URL
       _dio.options.baseUrl = baseUrl;
       
-      // Force HTTPS
-      (_dio.httpClientAdapter as IOHttpClientAdapter).onHttpClientCreate = (client) {
+      // Force HTTPS and certificate pinning
+      (_dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
+        final client = HttpClient();
         client.badCertificateCallback = (cert, host, port) {
           // Certificate pinning logic
           final fingerprint = _calculateSHA256Fingerprint(cert.der);
@@ -55,7 +56,11 @@ class SecureTMDBApi {
             options.baseUrl = options.baseUrl.replaceFirst('http://', 'https://');
           }
           return handler.next(options);
-        }
+        },
+        onError: (error, handler) {
+          SecurityLogger.error('Network error: ${error.message}');
+          return handler.next(error);
+        },
       ));
       
       _isInitialized = true;
@@ -88,6 +93,7 @@ class SecureTMDBApi {
           // Additional security headers
           headers: {
             'User-Agent': 'Limux-App/1.0',
+            'Accept': 'application/json',
           },
         ),
       );
@@ -203,7 +209,7 @@ class SecureTMDBApi {
     }
   }
   
-  // Search TV shows
+  // Search TV shows  
   Future<List<TvShow>> searchTvShows(String query) async {
     try {
       final data = await _secureGet('/search/tv', queryParams: {'query': query});
@@ -211,6 +217,114 @@ class SecureTMDBApi {
     } catch (e) {
       SecurityLogger.error('Failed to search TV shows: ${e.toString()}');
       throw Exception('Failed to search TV shows');
+    }
+  }
+  
+  // Get movies by genre
+  Future<List<Movie>> getMoviesByGenre(int genreId, {int page = 1}) async {
+    try {
+      final data = await _secureGet('/discover/movie', queryParams: {
+        'with_genres': genreId.toString(),
+        'page': page.toString(),
+        'sort_by': 'popularity.desc',
+      });
+      return (data['results'] as List).map((movie) => Movie.fromJson(movie)).toList();
+    } catch (e) {
+      SecurityLogger.error('Failed to load movies by genre: ${e.toString()}');
+      throw Exception('Failed to load movies by genre');
+    }
+  }
+  
+  // Get TV shows by genre
+  Future<List<TvShow>> getTvShowsByGenre(int genreId, {int page = 1}) async {
+    try {
+      final data = await _secureGet('/discover/tv', queryParams: {
+        'with_genres': genreId.toString(),
+        'page': page.toString(),
+        'sort_by': 'popularity.desc',
+      });
+      return (data['results'] as List).map((show) => TvShow.fromJson(show)).toList();
+    } catch (e) {
+      SecurityLogger.error('Failed to load TV shows by genre: ${e.toString()}');
+      throw Exception('Failed to load TV shows by genre');
+    }
+  }
+  
+  // Get top rated movies
+  Future<List<Movie>> getTopRatedMovies({int page = 1}) async {
+    try {
+      final data = await _secureGet('/movie/top_rated', queryParams: {
+        'page': page.toString(),
+      });
+      return (data['results'] as List).map((movie) => Movie.fromJson(movie)).toList();
+    } catch (e) {
+      SecurityLogger.error('Failed to load top rated movies: ${e.toString()}');
+      throw Exception('Failed to load top rated movies');
+    }
+  }
+  
+  // Get top rated TV shows
+  Future<List<TvShow>> getTopRatedTvShows({int page = 1}) async {
+    try {
+      final data = await _secureGet('/tv/top_rated', queryParams: {
+        'page': page.toString(),
+      });
+      return (data['results'] as List).map((show) => TvShow.fromJson(show)).toList();
+    } catch (e) {
+      SecurityLogger.error('Failed to load top rated TV shows: ${e.toString()}');
+      throw Exception('Failed to load top rated TV shows');
+    }
+  }
+  
+  // Get now playing movies
+  Future<List<Movie>> getNowPlayingMovies({int page = 1}) async {
+    try {
+      final data = await _secureGet('/movie/now_playing', queryParams: {
+        'page': page.toString(),
+      });
+      return (data['results'] as List).map((movie) => Movie.fromJson(movie)).toList();
+    } catch (e) {
+      SecurityLogger.error('Failed to load now playing movies: ${e.toString()}');
+      throw Exception('Failed to load now playing movies');
+    }
+  }
+  
+  // Get upcoming movies
+  Future<List<Movie>> getUpcomingMovies({int page = 1}) async {
+    try {
+      final data = await _secureGet('/movie/upcoming', queryParams: {
+        'page': page.toString(),
+      });
+      return (data['results'] as List).map((movie) => Movie.fromJson(movie)).toList();
+    } catch (e) {
+      SecurityLogger.error('Failed to load upcoming movies: ${e.toString()}');
+      throw Exception('Failed to load upcoming movies');
+    }
+  }
+  
+  // Get airing today TV shows
+  Future<List<TvShow>> getAiringTodayTvShows({int page = 1}) async {
+    try {
+      final data = await _secureGet('/tv/airing_today', queryParams: {
+        'page': page.toString(),
+      });
+      return (data['results'] as List).map((show) => TvShow.fromJson(show)).toList();
+    } catch (e) {
+      SecurityLogger.error('Failed to load airing today TV shows: ${e.toString()}');
+      throw Exception('Failed to load airing today TV shows');
+    }
+  }
+  
+  // Get on the air TV shows
+  Future<List<TvShow>> getOnTheAirTvShows({int page = 1}) async {
+    try {
+      final data = await _secureGet('/tv/on_the_air', queryParams: {
+        'page': page.toString(),
+      });
+      return (data['results'] as List).map((show) => TvShow.fromJson(show)).toList();
+    } catch (e) {
+      SecurityLogger.error('Failed to load on the air TV shows: ${e.toString()}');
+      throw Exception('Failed to load on the air TV shows');
     }
   }
   
@@ -228,5 +342,37 @@ class SecureTMDBApi {
   static String getProfileUrl(String path) {
     if (path.isEmpty) return '';
     return '$imageBaseUrl/w185$path';
+  }
+  
+  static String getOriginalUrl(String path) {
+    if (path.isEmpty) return '';
+    return '$imageBaseUrl/original$path';
+  }
+  
+  static String getThumbnailUrl(String path) {
+    if (path.isEmpty) return '';
+    return '$imageBaseUrl/w200$path';
+  }
+  
+  // Utility method to check network connectivity
+  Future<bool> checkConnectivity() async {
+    try {
+      final response = await _dio.get(
+        '/configuration',
+        queryParameters: {'api_key': await ApiKeyManager.getApiKey()},
+        options: Options(
+          receiveTimeout: const Duration(seconds: 5),
+        ),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      SecurityLogger.warn('Network connectivity check failed: ${e.toString()}');
+      return false;
+    }
+  }
+  
+  // Clean up resources
+  void dispose() {
+    _dio.close();
   }
 }

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/secure_auth_service.dart';
-import '../utils/constants.dart';
 import '../utils/security_logger.dart';
 import 'home_screen.dart';
 import 'favorites_screen.dart';
@@ -78,7 +77,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Single
         decoration: BoxDecoration(
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.2),
+              color: Colors.black.withValues(alpha: 0.2),
               blurRadius: 10,
               offset: const Offset(0, -5),
             ),

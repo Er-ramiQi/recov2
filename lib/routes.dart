@@ -9,6 +9,7 @@ import 'screens/simplified_profile_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/splash_screen.dart';
+import 'screens/main_navigation_screen.dart';
 import 'services/secure_auth_service.dart';
 
 // Application routes configuration
@@ -20,7 +21,7 @@ class AppRoutes {
   static const String movieDetail = '/movie_detail';
   static const String tvShowDetail = '/tv_show_detail';
   static const String favorites = '/favorites';
-  static const String recommendations = '/recommendations';
+  static const String recommendations = '/recommendations';  
   static const String profile = '/profile';
 
   // Route generator
@@ -43,7 +44,7 @@ class AppRoutes {
             if (!authService.isAuthenticated) {
               return const LoginScreen();
             }
-            return const HomeScreen();
+            return const MainNavigationScreen();
           },
         );
       
@@ -128,7 +129,7 @@ class AppRoutes {
   // Error route
   static Route<dynamic> _errorRoute(String message) {
     return MaterialPageRoute(
-      builder: (_) => Scaffold(
+      builder: (context) => Scaffold(
         appBar: AppBar(
           title: const Text('Error'),
         ),
@@ -152,7 +153,7 @@ class AppRoutes {
                 const SizedBox(height: 16),
                 ElevatedButton(
                   onPressed: () {
-                    Navigator.of(_).pushReplacementNamed(home);
+                    Navigator.of(context).pushReplacementNamed(home);
                   },
                   child: const Text('Retour à l\'accueil'),
                 ),

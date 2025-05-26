@@ -477,9 +477,9 @@
     },
     {
       "name": "logger",
-      "rootUri": "file:///C:/Users/meder/AppData/Local/Pub/Cache/hosted/pub.dev/logger-1.4.0",
+      "rootUri": "file:///C:/Users/meder/AppData/Local/Pub/Cache/hosted/pub.dev/logger-2.5.0",
       "packageUri": "lib/",
-      "languageVersion": "2.12"
+      "languageVersion": "2.17"
     },
     {
       "name": "logging",
@@ -926,7 +926,7 @@
       "languageVersion": "2.17"
     }
   ],
-  "generated": "2025-05-26T11:48:52.662579Z",
+  "generated": "2025-05-26T12:05:59.434390Z",
   "generator": "pub",
   "generatorVersion": "3.7.2",
   "flutterRoot": "file:///C:/src/flutter",

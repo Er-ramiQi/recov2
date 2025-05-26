@@ -44,10 +44,10 @@ class SecurityLogger {
     // Replace phone numbers
     sanitized = sanitized.replaceAllMapped(_phonePattern, (match) => '<PHONE>');
     
-    // Replace sensitive terms
+// Replace sensitive terms
     for (final term in _sensitiveTerms) {
       final RegExp pattern = RegExp(
-        r'(' + term + r'[\s]*[=:]\s*["\']?)([^"\',\s]+)(["\']?)',
+        '($term[\\s]*[=:]\\s*["\']?)([^"\'\\,\\s]+)(["\']?)',
         caseSensitive: false,
       );
       
@@ -82,11 +82,13 @@ class SecurityLogger {
     _writeToFile(LogLevel.warning, sanitized);
   }
 
-  // Error level logging
+// Error level logging
   static void error(String message, [dynamic error, StackTrace? stackTrace]) {
     final sanitized = _sanitizeMessage(message);
-    if (error != null) {
-      _logger.e(sanitized, error: error, stackTrace: stackTrace);
+    if (error != null && stackTrace != null) {
+      _logger.e(sanitized, error, stackTrace);
+    } else if (error != null) {
+      _logger.e(sanitized, error);
     } else {
       _logger.e(sanitized);
     }
